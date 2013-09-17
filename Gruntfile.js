@@ -280,7 +280,7 @@ module.exports = function (grunt) {
         grunt.file.mkdir('_raw/docs/' + lastTag);
       }
 
-      grunt.file.copy('report/docs/iso.html', '_raw/docs/' + lastTag + '/ios.html');
+      grunt.file.copy('report/docs/ios.html', '_raw/docs/' + lastTag + '/ios.html');
       grunt.log.ok('Archived document with version: ' + lastTag);
       done();
     });
