@@ -25,9 +25,11 @@
 'use strict';
 
 // ext. libs
-var util = require('util');
 var Q = require('q');
+var os = require('os');
+var cp = require('child_process');
 var appium = require('appium/server');
+var portscanner = require('portscanner');
 
 /**
  * This module is a browser plugin for [DalekJS](//github.com/dalekjs/dalek).
@@ -44,15 +46,44 @@ var appium = require('appium/server');
  * You can use the browser plugin by adding a config option to the your Dalekfile
  *
  * ```javascript
- * "browsers": ["ios:safari"]
+ * "browsers": ["ios"]
  * ```
  *
  * Or you can tell Dalek that it should test in this browser via the command line:
  *
  * ```bash
- * $ dalek mytest.js -b ios:safari
+ * $ dalek mytest.js -b ios
  * ```
  *
+ * The Webdriver Server tries to open Port 9003 by default,
+ * if this port is blocked, it tries to use a port between 9004 & 9093
+ * You can specifiy a different port from within your [Dalekfile](/pages/config.html) like so:
+ *
+ * ```javascript
+ * "browsers": {
+ *   "ios": {
+ *     "port": 5555 
+ *   }
+ * }
+ * ```
+ *
+ * It is also possible to specify a range of ports:
+ *
+ * ```javascript
+ * "browsers": {
+ *   "ios": {
+ *     "portRange": [6100, 6120] 
+ *   }
+ * }
+ * ```
+ *
+ * If you would like to test on the IPad (IPhone) emulator, you can simply apply a snd. argument,
+ * which defines the browser type:
+ *
+ * ```bash
+ * $ dalek mytest.js -b ios:ipad
+ * ```
+ * 
  * @module DalekJS
  * @class IosDriver
  * @namespace Browser
@@ -70,7 +101,7 @@ var IosDriver = {
    * @default Mobile Safari iOS
    */
 
-  longName: 'Mobile Safari iOS',
+  longName: 'Mobile Safari iOS (iPhone)',
 
   /**
    * Default port of the Appium WebDriverServer
@@ -125,11 +156,30 @@ var IosDriver = {
    */
 
   desiredCapabilities: {
-    device: 'iPhone Simulator',
-    name: "Appium Hybrid App: with WD",
-    app: "safari",
+    device: 'iPhone Emulator',
+    name: 'Safari remote via WD',
+    app: 'safari',
     version: '6.1',
     browserName: ''
+  },
+
+  /**
+   * Driver defaults, what should the driver be able to access.
+   *
+   * @property driverDefaults
+   * @type object
+   */
+
+  driverDefaults: {
+    viewport: true,
+    status: {
+      os: {
+        arch: os.arch(),
+        version: os.release(),
+        name: 'Mac OSX'
+      }
+    },
+    sessionInfo: true
   },
 
   /**
@@ -141,26 +191,48 @@ var IosDriver = {
    */
 
   appiumArgs: {
-      app: null,
-      ipa: null,
-      quiet: true,
-      udid: null,
-      keepArtifacts: false,
-      noSessionOverride: false,
-      fullReset: false,
-      noReset: false,
-      launch: false,
-      log: false,
-      nativeInstrumentsLib: false,
-      safari: false,
-      forceIphone: false,
-      forceIpad: false,
-      orientation: null,
-      useKeystore: false,
-      address: '0.0.0.0', 
-      nodeconfig: null,
-      port: null,
-      webhook: null
+    app: null,
+    ipa: null,
+    quiet: true,
+    udid: null,
+    keepArtifacts: false,
+    noSessionOverride: false,
+    fullReset: false,
+    noReset: false,
+    launch: false,
+    log: false,
+    nativeInstrumentsLib: false,
+    safari: false,
+    forceIphone: false,
+    forceIpad: false,
+    orientation: null,
+    useKeystore: false,
+    address: '0.0.0.0',
+    nodeconfig: null,
+    port: null,
+    webhook: null
+  },
+
+  /**
+   * Different browser types (iPhone / iPad)
+   *
+   * @property browserTypes
+   * @type object
+   */
+
+  browserTypes: {
+
+    /**
+     * IPad emulator
+     *
+     * @property ipad
+     * @type object
+     */
+
+    ipad: {
+      name: 'iPad'
+    }
+
   },
 
   /**
@@ -175,6 +247,17 @@ var IosDriver = {
   },
 
   /**
+   * Resolves the maximum range for the driver port
+   *
+   * @method getMaxPort
+   * @return {integer} port Max WebDriver server port range
+   */
+
+  getMaxPort: function () {
+    return this.maxPort;
+  },
+
+  /**
    * Resolves the webhook port
    *
    * @method getWebhookPort
@@ -183,6 +266,17 @@ var IosDriver = {
 
   getWebhookPort: function () {
     return this.webhookPort;
+  },
+
+  /**
+   * Resolves the maximum range for the webhook port
+   *
+   * @method getWebhookPort
+   * @return {integer} WebHook Max WebHook port
+   */
+
+  getMaxWebhookPort: function () {
+    return this.maxWebhookPort;
   },
 
   /**
@@ -197,68 +291,202 @@ var IosDriver = {
   },
 
   /**
-   * Launches appium & corresponding emulator or device
+   * Launches appium & corresponding emulator or device,
+   * kicks off the portscanner
    *
    * @method launch
+   * @param {object} configuration Browser configuration
+   * @param {EventEmitter2} events EventEmitter (Reporter Emitter instance)
+   * @param {Dalek.Internal.Config} config Dalek configuration class
    * @return {object} promise Browser promise
    */
 
-  launch: function () {
+  launch: function (configuration, events, config) {
     var deferred = Q.defer();
 
-    // nasty hack to surpress socket.io debug reports from appium
-    this.old_write = process.stdout.write;
-    process.stdout.write = function () {};
+    // store injected configuration/log event handlers
+    this.reporterEvents = events;
+    this.configuration = configuration;
+    this.config = config;
 
-    this._processes(function (err, result) {
-      this.openProcesses = result;
-      appium.run(this._loadAppiumArgs(this.appiumArgs), function (appiumServer) {
-        this.appiumServer = appiumServer;
-        process.stdout.write = this.old_write;
-        deferred.resolve();
-      }.bind(this));
-    }.bind(this));
+    // check if the user wants to run the iPad emulator
+    if (configuration && configuration.type === 'ipad') {
+      this.longName = this.longName.replace('iPhone', 'iPad');
+      this.appiumArgs.forceIpad = true;
+    }
 
+    // check for a user set port
+    var browsers = this.config.get('browsers');
+    if (browsers && Array.isArray(browsers)) {
+      browsers.forEach(this._checkUserDefinedPorts.bind(this));
+    }
+
+    // check if the current port is in use, if so, scan for free ports
+    portscanner.findAPortNotInUse(this.getPort(), this.getMaxPort(), this.getHost(), this._checkPorts.bind(this, deferred));
     return deferred.promise;
   },
 
   /**
-   * Kills the ChromeWebDriverServer process
-   *
+   * Kills the Appium Server process,
+   * kills simulator processses
+   * with a slight timeout to prevent 
+   * appium from throwing errors
+   * 
    * @method kill
    * @chainable
    */
 
   kill: function () {
-    this._processes(function (err, result) {
-
-      // kill the appium servers
-      this.appiumServer.webSocket.server.close();
-      this.appiumServer.rest.listen().close();
-
-      result.forEach(function (processID) {
-        var kill = true;
-        this.openProcesses.forEach(function (pid) {
-          if (pid === processID) {
-            kill = false;
-          }
-        });
-
-        if (kill === true) {
-          var killer = require('child_process').spawn;
-          killer('kill', [processID]);
-        }
-      }.bind(this));
-    }.bind(this));    
+    // kill appium servers
+    this.appiumServer.webSocket.server.close();
+    this.appiumServer.rest.listen().close();
+    // slight timeout for process killing
+    setTimeout(this._processes.bind(this, this._kill.bind(this)), 1000);
     return this;
   },
 
   /**
-   * Tracks running simulator processes
+   * Kills the non blacklisted simulator processes & restores
+   * the stderr handler
    *
-   * @method _processes
-   * @param {function} fn Callback
+   * @method _kill
+   * @param {object|null} err Error or null
+   * @param {array} result List of currently running simulator processes
    * @chainable
+   * @private
+   */
+
+  _kill: function (err, result) {
+    // kill simulator processes
+    result.forEach(this._killProcess.bind(this));
+    // (re)establish stderr stream
+    process.stderr.write = this.oldWriteErr;
+    return this;
+  },
+
+  /**
+   * Checks a blacklist & kills the process when
+   * not found
+   *
+   * @method _killProcess
+   * @param {integer} processID Process ID
+   * @chainable
+   * @private
+   */
+
+  _killProcess: function (processID) {
+    var kill = true;
+
+    // walk through the list of processes that are
+    // open before the driver started
+    this.openProcesses.forEach(function (pid) {
+      if (pid === processID) {
+        kill = false;
+      }
+    });
+
+    if (kill === true) {
+      cp.spawn('kill', [processID]);
+    }
+
+    return this;
+  },
+
+  /**
+   * Checks & switches the appium server port,
+   * scans the range for the webhook port
+   *
+   * @method _listProcesses
+   * @param {object} deferred Promise
+   * @param {object|null} err Error or null
+   * @param {integer} port Appium server port to use
+   * @chainable
+   * @private
+   */
+
+  _checkPorts: function (deferred, error, port) {
+    // check if the port was blocked & if we need to switch to another port
+    if (this.port !== port) {
+      this.reporterEvents.emit('report:log:system', 'dalek-browser-ios: Switching to port: ' + port);
+      this.port = port;
+    }
+
+    // check if the current webhook port is in use, if so, scan for free ports
+    portscanner.findAPortNotInUse(this.getWebhookPort(), this.getMaxWebhookPort(), this.getHost(), this._launch.bind(this, deferred));
+    return this;
+  },
+
+  /**
+   * Checks & switches the webhook port,
+   * loads a list of running simulator processes
+   *
+   * @method _listProcesses
+   * @param {object} deferred Promise
+   * @param {object|null} err Error or null
+   * @param {integer} port Webhook port to use
+   * @chainable
+   * @private
+   */
+
+  _launch: function (deferred, error, port) {
+    // check if the port was blocked & if we need to switch to another port
+    if (this.webhookPort !== port) {
+      this.reporterEvents.emit('report:log:system', 'dalek-browser-ios: Switching to webhook port: ' + port);
+      this.webhookPort = port;
+    }
+
+    // launch appium & the emulator
+    this._processes(this._listProcesses.bind(this, deferred));
+    return this;
+  },
+
+  /**
+   * Stores open processes,
+   * suppresses stdout logs,
+   * starts appium
+   *
+   * @method _listProcesses
+   * @param {object} deferred Promise
+   * @param {object|null} err Error or null
+   * @param {array} result List of currently running simulator processes
+   * @chainable
+   * @private
+   */
+
+  _listProcesses: function (deferred, err, result) {
+    // save list of open emulator processes, before we launched it
+    this.openProcesses = result;
+    // nasty hack to surpress socket.io debug reports from appium
+    this._suppressAppiumLogs();    
+    // run appium
+    appium.run(this._loadAppiumArgs(this.appiumArgs), this._afterAppiumStarted.bind(this, deferred));
+    return this;
+  },
+
+  /**
+   * Stores the appium server reference,
+   * restores the stdout logs
+   *
+   * @method _afterAppiumStarted
+   * @param {object} deferred Promise
+   * @param {object} appiumServer Appium server instance
+   * @chainable
+   * @private
+   */
+
+  _afterAppiumStarted: function (deferred, appiumServer) {
+    this.appiumServer = appiumServer;
+    this._reinstantiateLog();
+    deferred.resolve();
+    return this;
+  },
+
+  /**
+   * Configures appium
+   *
+   * @method _loadAppiumArgs
+   * @param {object} appiumArgs Appium specific configuration
+   * @return {object} Modified appium configuration
    * @private
    */
 
@@ -266,6 +494,46 @@ var IosDriver = {
     appiumArgs.port = this.getPort();
     appiumArgs.webhook = this.getHost() + ':' + this.getWebhookPort();
     return appiumArgs;
+  },
+
+  /**
+   * Process user defined ports
+   *
+   * @method _checkUserDefinedPorts
+   * @param {object} browser Browser configuration
+   * @chainable
+   * @private
+   */
+
+  _checkUserDefinedPorts: function (browser) {
+    // check for a single defined port
+    if (browser.ios && browser.ios.port) {
+      this.port = parseInt(browser.ios.port, 10);
+      this.maxPort = this.port + 90;
+      this.reporterEvents.emit('report:log:system', 'dalek-browser-ios: Switching to user defined port: ' + this.port);
+    }
+
+    // check for a port range
+    if (browser.ios && browser.ios.portRange && browser.ios.portRange.length === 2) {
+      this.port = parseInt(browser.ios.portRange[0], 10);
+      this.maxPort = parseInt(browser.ios.portRange[1], 10);
+      this.reporterEvents.emit('report:log:system', 'dalek-browser-ios: Switching to user defined port(s): ' + this.port + ' -> ' + this.maxPort);
+    }
+
+    // check for a single defined webhook port
+    if (browser.ios && browser.ios.webhookPort) {
+      this.webhookPort = parseInt(browser.ios.webhookPort, 10);
+      this.maxWebhookPort = this.webhookPort + 90;
+      this.reporterEvents.emit('report:log:system', 'dalek-browser-ios: Switching to user defined webhook port: ' + this.webhookPort);
+    }
+
+    // check for a webhook port range
+    if (browser.ios && browser.ios.webhookPortRange && browser.ios.webhookPortRange.length === 2) {
+      this.webhookPort = parseInt(browser.ios.webhookPortRange[0], 10);
+      this.maxWebhookPort = parseInt(browser.ios.webhookPortRange[1], 10);
+      this.reporterEvents.emit('report:log:system', 'dalek-browser-ios: Switching to user defined webhook port(s): ' + this.webhookPort + ' -> ' + this.maxWebhookPort);
+    }
+    return this;
   },
 
   /**
@@ -279,31 +547,99 @@ var IosDriver = {
 
   _processes: function (fn) {
     var cmd = ['ps -ax', '|', 'grep "iPhone Simulator.app"'];
-    var pattern = /^(\d+)\s+([^\s]+)\s+([^\s]+)\s+(.+)/;
-    var exec = require('child_process').exec;
-    exec(cmd.join(' '), function(err, stdout, stderr){
-      var result = [];
+    cp.exec(cmd.join(' '), this._transformProcesses.bind(this, fn));
+    return this;
+  },
 
-      stdout.split('\n').forEach(function(line){
-        var data = line.split(' ');
-        data = data.filter(function (item) {
-          if (item !== '') {
-            return item;
-          }
+  /**
+   * Transforms the process list output into
+   * a json structure
+   * 
+   * @method _transformProcesses
+   * @param {function} fn Callback
+   * @param {null|object} err Error if error, null if not
+   * @param {string} stdout Terminal output
+   * @chainable
+   * @private
+   */
 
-          return false;
-        });
+  _transformProcesses: function(fn, err, stdout){
+    var result = [];
+    stdout.split('\n').forEach(this._scanProcess.bind(this, result));
+    fn(err, result);
+    return this;
+  },
 
-        if (data[1] === '??') {
-          result.push(data[0])
-        }
-      });
+  /**
+   * Scans and transforms the process list
+   *
+   * @method _scanProcess
+   * @param {array} result Transformed result
+   * @param {string} line Process list entry
+   * @chainable
+   * @private
+   */
 
-      fn(err, result);
-    });
+  _scanProcess: function (result, line){
+    var data = line.split(' ');
+    data = data.filter(this._filterProcessItem);
+
+    if (data[1] === '??') {
+      result.push(data[0]);
+    }
 
     return this;
+  },
+
+  /**
+   * Filters process list items
+   *
+   * @method _filterProcessItem
+   * @param {string} item Process list entry
+   * @return {bool|string} Process item or false
+   * @private
+   */
+
+  _filterProcessItem: function (item) {
+    if (item !== '') {
+      return item;
+    }
+
+    return false;
+  },
+
+  /**
+   * Overwrite default stdout & stderr handler
+   * to suppress some appium logs 
+   *
+   * @method _suppressAppiumLogs
+   * @chainable
+   * @private
+   */
+
+  _suppressAppiumLogs: function () {
+    var noop = function () {};
+    this.oldWrite = process.stdout.write;
+    this.oldWriteErr = process.stderr.write;
+    process.stdout.write = noop;
+    process.stderr.write = noop;
+    return this;
+  },
+
+  /**
+   * Reinstantiate stdout handler after appium has
+   * been started
+   *
+   * @method _reinstantiateLog
+   * @chainable
+   * @private
+   */
+
+  _reinstantiateLog: function () {
+    process.stdout.write = this.oldWrite;
+    return this;
   }
+
 };
 
 // expose the module

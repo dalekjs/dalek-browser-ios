@@ -1,12 +1,16 @@
 'use strict';
 
 var expect = require('chai').expect;
-var ChromeDriver = require('../index');
+var IosDriver = require('../index');
 
-describe('dalek-browser-chrome', function() {
+describe('dalek-browser-ios', function() {
 
   it('should get default webdriver port', function(){
-    expect(ChromeDriver.port).to.equal(9002);
+    expect(IosDriver.port).to.equal(4723);
+  });
+
+  it('should get default webhook port', function(){
+    expect(IosDriver.webhookPort).to.equal(9003);
   });
 
 });

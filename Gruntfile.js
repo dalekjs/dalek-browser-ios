@@ -2,6 +2,9 @@
 module.exports = function (grunt) {
   'use strict';
 
+  // check task runtime
+  require('time-grunt')(grunt);
+
   grunt.initConfig({
 
     // load module meta data
@@ -9,10 +12,10 @@ module.exports = function (grunt) {
 
     // define a src set of files for other tasks
     src: {
-      lint: ['Gruntfile.js', 'index.js', 'install.js', 'lib/**/*.js', 'test/*.js'],
-      complexity: ['index.js', 'install.js', 'lib/**/*.js'],
+      lint: ['Gruntfile.js', 'index.js', 'test/*.js'],
+      complexity: ['index.js'],
       test: ['test/*.js'],
-      src: ['index.js', 'install.js', 'lib/**/*.js']
+      src: ['index.js']
     },
 
     // clean automatically generated helper files & docs
@@ -20,6 +23,12 @@ module.exports = function (grunt) {
       coverage: ['coverage', 'report/coverage'],
       report: ['report/complexity', 'report/api', 'report/docs'],
       reportZip: ['report.zip']
+    },
+
+    // speed up build by defining concurrent tasks
+    concurrent: {
+      test: ['lint', 'mochaTest', 'complexity'],
+      docs: ['plato', 'documantix', 'yuidoc']
     },
 
     // linting
@@ -100,8 +109,8 @@ module.exports = function (grunt) {
         footer: 'dalekjs/dalekjs.com/master/assets/footer.html',
         target: 'report/docs',
         vars: {
-          title: 'DalekJS - Documentation - Browser - Google Chrome',
-          desc: 'DalekJS - Documentation - Browser - Google Chrome',
+          title: 'DalekJS - Documentation - Browser - Mobile Safari on iOS',
+          desc: 'DalekJS - Documentation - Browser - Mobile Safari on iOS',
           docs: true
         }
       },
@@ -153,8 +162,8 @@ module.exports = function (grunt) {
   grunt.registerTask('preparePlato', function () {
     var fs = require('fs');
 
-    var platoDummyFolders = ['report', 'report/coverage', 'report/complexity', 'report/complexity/files', 'report/complexity/files/test', 'report/complexity/files/index_js', 'report/complexity/files/install_js', 'report/complexity/files/lib_chromedriver_js'];
-    var platoDummyFiles = ['/report/complexity/report.history.json', '/report/complexity/files/report.history.json', '/report/complexity/files/index_js/report.history.json', '/report/complexity/files/install_js/report.history.json', '/report/complexity/files/lib_chromedriver_js/report.history.json'];
+    var platoDummyFolders = ['report', 'report/coverage', 'report/complexity', 'report/complexity/files', 'report/complexity/files/test', 'report/complexity/files/index_js'];
+    var platoDummyFiles = ['/report/complexity/report.history.json', '/report/complexity/files/report.history.json', '/report/complexity/files/index_js/report.history.json'];
 
     // loopy loop
     ['/test/'].forEach(function (folder) {
@@ -192,7 +201,7 @@ module.exports = function (grunt) {
     });
 
     // generate code coverage helper file
-    var coverageHelper = 'require("blanket")({pattern: [require("fs").realpathSync(__dirname + "/../index.js"), require("fs").realpathSync(__dirname + "/../lib/")]});';
+    var coverageHelper = 'require("blanket")({pattern: [require("fs").realpathSync(__dirname + "/../index.js")]});';
     if (!fs.existsSync(__dirname + '/coverage/blanket.js')) {
       fs.writeFileSync(__dirname + '/coverage/blanket.js', coverageHelper);
     }
@@ -261,7 +270,7 @@ module.exports = function (grunt) {
     var done = this.async();
     grunt.util.spawn({cmd: 'git', args: ['describe', '--abbrev=0', '--tags']}, function (error, result) {
       var lastTag = result.toString();
-      if (grunt.file.isFile('_raw/docs/' + lastTag + '/chrome.html')) {
+      if (grunt.file.isFile('_raw/docs/' + lastTag + '/ios.html')) {
         grunt.log.ok('Nothing to archive');
         done();
         return true;
@@ -271,7 +280,7 @@ module.exports = function (grunt) {
         grunt.file.mkdir('_raw/docs/' + lastTag);
       }
 
-      grunt.file.copy('report/docs/chrome.html', '_raw/docs/' + lastTag + '/chrome.html');
+      grunt.file.copy('report/docs/iso.html', '_raw/docs/' + lastTag + '/ios.html');
       grunt.log.ok('Archived document with version: ' + lastTag);
       done();
     });
@@ -357,20 +366,11 @@ module.exports = function (grunt) {
   });
 
   // load 3rd party tasks
-  grunt.loadNpmTasks('grunt-contrib-jshint');
-  grunt.loadNpmTasks('grunt-contrib-clean');
-  grunt.loadNpmTasks('grunt-contrib-yuidoc');
-  grunt.loadNpmTasks('grunt-contrib-compress');
-  grunt.loadNpmTasks('grunt-mocha-test');
-  grunt.loadNpmTasks('grunt-complexity');
-  grunt.loadNpmTasks('grunt-documantix');
-  grunt.loadNpmTasks('grunt-plato');
-  grunt.loadNpmTasks('grunt-bump');
-  grunt.loadNpmTasks('grunt-include-replace');
+  require('load-grunt-tasks')(grunt);
 
   // define runner tasks
   grunt.registerTask('lint', 'jshint');
-  grunt.registerTask('test', ['clean:coverage', 'prepareCoverage', 'lint', 'mochaTest', 'generateCoverageBadge', 'complexity']);
-  grunt.registerTask('docs', ['clean:reportZip', 'clean:report', 'preparePlato', 'plato', 'documantix', 'includereplace', 'yuidoc', 'compress']);
+  grunt.registerTask('test', ['clean:coverage', 'prepareCoverage', 'concurrent:test', 'generateCoverageBadge']);
+  grunt.registerTask('docs', ['clean:reportZip', 'clean:report', 'preparePlato', 'concurrent:docs', 'includereplace', 'compress']);
   grunt.registerTask('all', ['clean', 'test', 'docs']);
 };
