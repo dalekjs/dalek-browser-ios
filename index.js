@@ -457,7 +457,7 @@ var IosDriver = {
     // save list of open emulator processes, before we launched it
     this.openProcesses = result;
     // nasty hack to surpress socket.io debug reports from appium
-    this._suppressAppiumLogs();    
+    this._suppressAppiumLogs();
     // run appium
     appium.run(this._loadAppiumArgs(this.appiumArgs), this._afterAppiumStarted.bind(this, deferred));
     return this;
@@ -506,6 +506,21 @@ var IosDriver = {
    */
 
   _checkUserDefinedPorts: function (browser) {
+    this._checkAppiumPorts(browser);
+    this._checkWebhookPorts(browser);
+    return this;
+  },
+
+  /**
+   * Process user defined appium ports
+   *
+   * @method _checkAppiumPorts
+   * @param {object} browser Browser configuration
+   * @chainable
+   * @private
+   */
+
+  _checkAppiumPorts: function (browser) {
     // check for a single defined port
     if (browser.ios && browser.ios.port) {
       this.port = parseInt(browser.ios.port, 10);
@@ -520,6 +535,19 @@ var IosDriver = {
       this.reporterEvents.emit('report:log:system', 'dalek-browser-ios: Switching to user defined port(s): ' + this.port + ' -> ' + this.maxPort);
     }
 
+    return this;
+  },
+
+  /**
+   * Process user defined webhook ports
+   *
+   * @method _checkWebhookPorts
+   * @param {object} browser Browser configuration
+   * @chainable
+   * @private
+   */
+
+  _checkWebhookPorts: function (browser) {
     // check for a single defined webhook port
     if (browser.ios && browser.ios.webhookPort) {
       this.webhookPort = parseInt(browser.ios.webhookPort, 10);
@@ -533,6 +561,7 @@ var IosDriver = {
       this.maxWebhookPort = parseInt(browser.ios.webhookPortRange[1], 10);
       this.reporterEvents.emit('report:log:system', 'dalek-browser-ios: Switching to user defined webhook port(s): ' + this.webhookPort + ' -> ' + this.maxWebhookPort);
     }
+
     return this;
   },
 
