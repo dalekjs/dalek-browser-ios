@@ -28,7 +28,7 @@
 var Q = require('q');
 var os = require('os');
 var cp = require('child_process');
-var appium = require('appium/server');
+var appium = require('appium/lib/server/main');
 var portscanner = require('portscanner');
 
 /**
@@ -359,8 +359,8 @@ var IosDriver = {
   _kill: function (err, result) {
     // kill simulator processes
     result.forEach(this._killProcess.bind(this));
-    // (re)establish stderr stream
-    process.stderr.write = this.oldWriteErr;
+    // (re)establish stderr/stdout stream
+    this._reinstantiateLog();
     return this;
   },
 
@@ -476,7 +476,6 @@ var IosDriver = {
 
   _afterAppiumStarted: function (deferred, appiumServer) {
     this.appiumServer = appiumServer;
-    this._reinstantiateLog();
     deferred.resolve();
     return this;
   },
@@ -647,11 +646,20 @@ var IosDriver = {
    */
 
   _suppressAppiumLogs: function () {
-    var noop = function () {};
+    // TODO: Check if the log level of appium can be set to 0
+    var _supLogs = function (data) {
+      if (data.search('6minfo') === -1 && data.search('33mwarn') === -1 && data.search('90mdebug') === -1) {
+        this.oldWrite.bind(process.stdout)(data);
+      }
+    }.bind(this);
+
+    // store old std. handler
     this.oldWrite = process.stdout.write;
     this.oldWriteErr = process.stderr.write;
-    process.stdout.write = noop;
-    process.stderr.write = noop;
+
+    // overwrite with ugliness
+    process.stdout.write = _supLogs;
+    process.stderr.write = _supLogs;
     return this;
   },
 
@@ -665,7 +673,10 @@ var IosDriver = {
    */
 
   _reinstantiateLog: function () {
-    process.stdout.write = this.oldWrite;
+    setTimeout(function () {
+      process.stdout.write = this.oldWrite;
+      process.stderr.write = this.oldWriteErr;
+    }.bind(this), 8000);
     return this;
   }
 
