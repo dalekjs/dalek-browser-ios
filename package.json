@@ -1,6 +1,6 @@
 {
   "name": "dalek-browser-ios",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "iOS Safari bindings for DalekJS",
   "homepage": "http://dalekjs.com",
   "main": "./index.js",
