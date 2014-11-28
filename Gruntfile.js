@@ -20,6 +20,7 @@ module.exports = function (grunt) {
       test: ['test/*.js'],
       src: ['index.js']
     },
+    
     // clean automatically generated helper files & docs
     clean: configs.clean,
 
